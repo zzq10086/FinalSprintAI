@@ -1,0 +1,30 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 本地环境变量与密钥
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# 测试与工具缓存
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 本地学习数据（课程、上传资料、错题等）
+data/*
+!data/.gitkeep
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
