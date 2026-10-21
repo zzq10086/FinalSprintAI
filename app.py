@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import calendar
 from datetime import date
 
 import streamlit as st
@@ -51,6 +52,70 @@ def safe_score(value: object, default: int = 3) -> int:
     except (TypeError, ValueError):
         return default
     return max(1, min(5, score))
+
+
+def date_selector(
+    label: str,
+    initial: date,
+    min_date: date,
+    key_prefix: str,
+) -> tuple[date, bool]:
+    """使用年/月/日三个下拉框选择日期。
+
+    不使用 st.date_input，避免 Streamlit 原生日期组件跨月时
+    月份高亮变化但日历不跳转的问题。
+    """
+
+    current_year = date.today().year
+    min_year = min(min_date.year, initial.year)
+    max_year = max(initial.year, current_year) + 5
+    years = list(range(min_year, max_year + 1))
+
+    col_year, col_month, col_day = st.columns(3)
+
+    with col_year:
+        year = st.selectbox(
+            f"{label}年份",
+            options=years,
+            index=years.index(initial.year),
+            key=f"{key_prefix}_year",
+        )
+
+    with col_month:
+        month = st.selectbox(
+            f"{label}月份",
+            options=list(range(1, 13)),
+            index=initial.month - 1,
+            format_func=lambda value: f"{value} 月",
+            key=f"{key_prefix}_month",
+        )
+
+    max_day = calendar.monthrange(year, month)[1]
+    day_key = f"{key_prefix}_day"
+
+    # 月份变化后，把原来不存在的日期（例如 31 日）收敛到当月最大日期。
+    if day_key in st.session_state:
+        try:
+            current_day = int(st.session_state[day_key])
+        except (TypeError, ValueError):
+            current_day = 1
+        st.session_state[day_key] = min(max(current_day, 1), max_day)
+
+    with col_day:
+        day = st.selectbox(
+            f"{label}日期",
+            options=list(range(1, max_day + 1)),
+            index=min(initial.day, max_day) - 1,
+            key=day_key,
+        )
+
+    selected = date(year, month, day)
+    is_valid = selected >= min_date
+
+    if not is_valid:
+        st.warning(f"{label}不能早于 {min_date.isoformat()}。")
+
+    return selected, is_valid
 
 
 def render_analysis(analysis: dict, material: dict) -> None:
@@ -189,8 +254,9 @@ except StorageError as exc:
 # Streamlit 的表单会缓存组件值，日期跨月选择时可能提交旧日期。
 if st.session_state.pop("reset_create_course_form", False):
     st.session_state["new_course_name"] = ""
-    st.session_state["new_exam_date"] = date.today()
     st.session_state["new_daily_minutes"] = 60
+    for key in ("new_exam_year", "new_exam_month", "new_exam_day"):
+        st.session_state.pop(key, None)
 
 with st.expander("➕ 创建新的复习任务", expanded=not courses):
     course_name = st.text_input(
@@ -199,14 +265,15 @@ with st.expander("➕ 创建新的复习任务", expanded=not courses):
         max_chars=60,
         key="new_course_name",
     )
-    col_date, col_minutes = st.columns(2)
-    exam_date = col_date.date_input(
+
+    exam_date, exam_date_valid = date_selector(
         "考试日期",
-        value=date.today(),
-        min_value=date.today(),
-        key="new_exam_date",
+        initial=date.today(),
+        min_date=date.today(),
+        key_prefix="new_exam",
     )
-    daily_minutes = col_minutes.select_slider(
+
+    daily_minutes = st.select_slider(
         "每天可用于复习的时间",
         options=[30, 60, 90, 120, 180, 240],
         value=60,
@@ -215,15 +282,18 @@ with st.expander("➕ 创建新的复习任务", expanded=not courses):
     )
 
     if st.button("创建复习任务", type="primary", key="create_course_button"):
-        try:
-            course = add_course(course_name, exam_date, daily_minutes)
-        except StorageError as exc:
-            st.error(str(exc))
+        if not exam_date_valid:
+            st.error("考试日期不能早于今天，请重新选择。")
         else:
-            st.session_state["active_course_id"] = course["id"]
-            st.session_state["reset_create_course_form"] = True
-            st.success(f"已创建课程：{course['name']}")
-            st.rerun()
+            try:
+                course = add_course(course_name, exam_date, daily_minutes)
+            except StorageError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state["active_course_id"] = course["id"]
+                st.session_state["reset_create_course_form"] = True
+                st.success(f"已创建课程：{course['name']}")
+                st.rerun()
 
 if not courses:
     st.info("还没有复习任务。请先在上方填写课程名称并创建任务。")
@@ -278,11 +348,11 @@ else:
     st.info(f"距离考试还有 {days_left} 天，可以按计划稳步复习。")
 
 with st.expander("✏️ 修改当前课程的考试日期 / 每日复习时间"):
-    edit_date = st.date_input(
+    edit_date, edit_date_valid = date_selector(
         "新的考试日期",
-        value=exam_date,
-        min_value=min(exam_date, date.today()),
-        key=f"edit_exam_date_{active_id}",
+        initial=exam_date,
+        min_date=min(exam_date, date.today()),
+        key_prefix=f"edit_exam_{active_id}",
     )
     minute_options = sorted(
         {30, 60, 90, 120, 180, 240, active_course["daily_minutes"]}
@@ -296,17 +366,20 @@ with st.expander("✏️ 修改当前课程的考试日期 / 每日复习时间"
     )
 
     if st.button("保存修改", key=f"save_course_{active_id}"):
-        try:
-            update_course(
-                active_id,
-                exam_date=edit_date,
-                daily_minutes=edit_minutes,
-            )
-        except StorageError as exc:
-            st.error(str(exc))
+        if not edit_date_valid:
+            st.error("考试日期不能早于允许的最早日期，请重新选择。")
         else:
-            st.success("已更新考试日期和每日复习时间。")
-            st.rerun()
+            try:
+                update_course(
+                    active_id,
+                    exam_date=edit_date,
+                    daily_minutes=edit_minutes,
+                )
+            except StorageError as exc:
+                st.error(str(exc))
+            else:
+                st.success("已更新考试日期和每日复习时间。")
+                st.rerun()
 
 st.divider()
 
@@ -469,6 +542,6 @@ else:
 
 st.divider()
 st.caption(
-    "当前版本 v0.2.1：课程任务、资料提取、AI 考点提炼与本地保存。"
+    "当前版本 v0.2.2：课程任务、资料提取、AI 考点提炼与本地保存。"
     "复习计划、练习题和错题本将在后续阶段加入。"
 )

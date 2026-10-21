@@ -46,6 +46,25 @@ def click_button(app, label: str):
     button.click().run()
 
 
+def select_date(app, label_prefix: str, target: date):
+    """通过年/月/日三个下拉框选择日期。"""
+
+    year_box = next(
+        item for item in app.selectbox if item.label == f"{label_prefix}年份"
+    )
+    year_box.set_value(target.year).run()
+
+    month_box = next(
+        item for item in app.selectbox if item.label == f"{label_prefix}月份"
+    )
+    month_box.set_value(target.month).run()
+
+    day_box = next(
+        item for item in app.selectbox if item.label == f"{label_prefix}日期"
+    )
+    day_box.set_value(target.day).run()
+
+
 def enable_fake_ai(monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "测试服务")
     monkeypatch.setenv("AI_BASE_URL", "https://example.com/v1")
@@ -114,11 +133,11 @@ def test_app_rejects_empty_course_name(app):
 
 
 def test_app_creates_course_with_selected_future_date(app):
-    target = date.today() + timedelta(days=60)
+    target = date.today() + timedelta(days=180)
 
     app.run()
     app.text_input[0].input("线性代数")
-    app.date_input[0].set_value(target).run()
+    select_date(app, "考试日期", target)
     click_button(app, "创建复习任务")
 
     assert not app.exception
@@ -126,17 +145,27 @@ def test_app_creates_course_with_selected_future_date(app):
     assert course["exam_date"] == target.isoformat()
 
 
+def test_app_rejects_past_exam_date(app):
+    target = date.today() - timedelta(days=30)
+
+    app.run()
+    app.text_input[0].input("线性代数")
+    select_date(app, "考试日期", target)
+    click_button(app, "创建复习任务")
+
+    assert not app.exception
+    assert storage.load_courses() == []
+    assert any("不能早于今天" in error.value for error in app.error)
+
+
 def test_app_updates_existing_course_date(app):
-    target = date.today() + timedelta(days=90)
+    target = date.today() + timedelta(days=180)
 
     app.run()
     app.text_input[0].input("线性代数")
     click_button(app, "创建复习任务")
 
-    edit_date = next(
-        item for item in app.date_input if "新的考试日期" in item.label
-    )
-    edit_date.set_value(target).run()
+    select_date(app, "新的考试日期", target)
     click_button(app, "保存修改")
 
     assert not app.exception
