@@ -275,3 +275,78 @@ def load_materials(
 
     materials.sort(key=lambda item: item.get("uploaded_at", ""))
     return materials
+
+
+def _validate_material_id(material_id: Any) -> str:
+    if not isinstance(material_id, str) or not material_id:
+        raise StorageError("资料 ID 无效。")
+    if any(char not in "0123456789abcdef" for char in material_id):
+        raise StorageError("资料 ID 无效。")
+    return material_id
+
+
+def _analysis_path(
+    course_id: str,
+    material_id: str,
+    data_dir: str | Path | None,
+) -> Path:
+    course_id = _validate_course_id(course_id)
+    material_id = _validate_material_id(material_id)
+    return (
+        _resolve_data_dir(data_dir)
+        / "analyses"
+        / course_id
+        / f"{material_id}.json"
+    )
+
+
+def save_analysis(
+    course_id: str,
+    material_id: str,
+    analysis: dict,
+    data_dir: str | Path | None = None,
+) -> dict:
+    """保存一份资料的 AI 分析结果（同一资料只保留最新一份）。"""
+
+    get_course(course_id, data_dir)
+    material_id = _validate_material_id(material_id)
+
+    material_path = (
+        _materials_dir(course_id, data_dir) / f"{material_id}.json"
+    )
+    if not material_path.exists():
+        raise StorageError("没有找到对应的资料，无法保存分析结果。")
+
+    if not isinstance(analysis, dict):
+        raise StorageError("分析结果格式不正确。")
+
+    key_points = analysis.get("key_points")
+    if not isinstance(key_points, list) or not key_points:
+        raise StorageError("分析结果中没有可保存的考点。")
+
+    record = dict(analysis)
+    record["course_id"] = course_id
+    record["material_id"] = material_id
+    record.setdefault(
+        "analyzed_at", datetime.now().isoformat(timespec="seconds")
+    )
+
+    _write_json(_analysis_path(course_id, material_id, data_dir), record)
+    return record
+
+
+def load_analysis(
+    course_id: str,
+    material_id: str,
+    data_dir: str | Path | None = None,
+) -> dict | None:
+    """读取某份资料的最新分析结果；没有分析过时返回 None。"""
+
+    path = _analysis_path(course_id, material_id, data_dir)
+    if not path.exists():
+        return None
+
+    analysis = _read_json(path, None)
+    if not isinstance(analysis, dict):
+        raise StorageError(f"分析结果格式损坏：{path.name}")
+    return analysis

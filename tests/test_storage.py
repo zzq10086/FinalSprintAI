@@ -11,8 +11,10 @@ from src.storage import (
     StorageError,
     add_course,
     get_course,
+    load_analysis,
     load_courses,
     load_materials,
+    save_analysis,
     save_material,
     update_course,
 )
@@ -147,3 +149,114 @@ def test_corrupted_courses_file_raises_storage_error(tmp_path):
 
     with pytest.raises(StorageError, match="格式损坏"):
         load_courses(tmp_path)
+
+
+def test_save_and_load_analysis(tmp_path):
+    course = add_course("操作系统", "2026-12-20", 60, data_dir=tmp_path)
+    material = save_material(
+        course["id"],
+        "chapter1.txt",
+        [{"page": 1, "text": "进程与线程"}],
+        data_dir=tmp_path,
+    )
+    analysis = {
+        "provider": "测试服务",
+        "model": "test-model",
+        "analyzed_at": "2026-10-21T10:00:00",
+        "chunk_count": 1,
+        "analyzed_chunks": 1,
+        "truncated": False,
+        "key_points": [
+            {
+                "title": "进程与线程",
+                "explanation": "解释",
+                "importance": 5,
+                "difficulty": 3,
+                "keywords": ["调度"],
+                "source_pages": [1],
+                "source_pages_estimated": False,
+            }
+        ],
+        "usage": {"total_tokens": 100},
+    }
+
+    saved = save_analysis(
+        course["id"], material["id"], analysis, data_dir=tmp_path
+    )
+
+    assert saved["course_id"] == course["id"]
+    assert saved["material_id"] == material["id"]
+
+    loaded = load_analysis(course["id"], material["id"], tmp_path)
+    assert loaded is not None
+    assert loaded["key_points"] == analysis["key_points"]
+    assert loaded["model"] == "test-model"
+
+
+def test_save_analysis_overwrites_previous_result(tmp_path):
+    course = add_course("操作系统", "2026-12-20", 60, data_dir=tmp_path)
+    material = save_material(
+        course["id"],
+        "chapter1.txt",
+        [{"page": 1, "text": "内容"}],
+        data_dir=tmp_path,
+    )
+
+    save_analysis(
+        course["id"],
+        material["id"],
+        {"key_points": [{"title": "旧考点"}]},
+        data_dir=tmp_path,
+    )
+    save_analysis(
+        course["id"],
+        material["id"],
+        {"key_points": [{"title": "新考点"}]},
+        data_dir=tmp_path,
+    )
+
+    loaded = load_analysis(course["id"], material["id"], tmp_path)
+    assert loaded is not None
+    assert loaded["key_points"] == [{"title": "新考点"}]
+
+
+def test_load_analysis_returns_none_when_missing(tmp_path):
+    course = add_course("操作系统", "2026-12-20", 60, data_dir=tmp_path)
+    material = save_material(
+        course["id"],
+        "chapter1.txt",
+        [{"page": 1, "text": "内容"}],
+        data_dir=tmp_path,
+    )
+
+    assert load_analysis(course["id"], material["id"], tmp_path) is None
+
+
+def test_save_analysis_for_unknown_material_rejected(tmp_path):
+    course = add_course("操作系统", "2026-12-20", 60, data_dir=tmp_path)
+
+    with pytest.raises(StorageError, match="没有找到对应的资料"):
+        save_analysis(
+            course["id"],
+            "abc123",
+            {"key_points": [{"title": "考点"}]},
+            data_dir=tmp_path,
+        )
+
+
+def test_save_analysis_requires_key_points(tmp_path):
+    course = add_course("操作系统", "2026-12-20", 60, data_dir=tmp_path)
+    material = save_material(
+        course["id"],
+        "chapter1.txt",
+        [{"page": 1, "text": "内容"}],
+        data_dir=tmp_path,
+    )
+
+    with pytest.raises(StorageError, match="没有可保存的考点"):
+        save_analysis(
+            course["id"],
+            material["id"],
+            {"key_points": []},
+            data_dir=tmp_path,
+        )
